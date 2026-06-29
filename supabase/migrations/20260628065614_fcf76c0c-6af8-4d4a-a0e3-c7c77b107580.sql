@@ -1,0 +1,2 @@
+ALTER TABLE public.monday_users ADD COLUMN IF NOT EXISTS app_user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS monday_users_app_user_id_uidx ON public.monday_users(app_user_id) WHERE app_user_id IS NOT NULL;
