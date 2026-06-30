@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/start";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listSystemCatalog, getMe } from "@/lib/admin.functions";
@@ -36,9 +37,6 @@ import { parseFile } from "@/lib/file-parser";
 import { BatteryProgress } from "@/components/BatteryProgress";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MondayAuthButton, useMondayUser } from "@/components/MondayAuth";
-
-// ייבוא פונקציות השרת מהקובץ המבודד החדש
-import { generateScenariosServer, analyzeChangesServer, getAppDataServer } from "@/lib/server-functions";
 
 const SYSTEMS = ['נמ"ר', "מזור", 'אל"ה', "רקמה", "CoView", "FHIR"] as const;
 const MODULES_BY_SYSTEM: Record<string, string[]> = {
@@ -197,7 +195,11 @@ function HomePage() {
 
   const loadAll = useCallback(async () => {
     try {
-      const data = await getAppDataServer();
+      const getAppDataFn = createServerFn("GET", async () => {
+        const { getAppData } = await import("@/lib/app-data.functions");
+        return getAppData();
+      });
+      const data = await getAppDataFn();
       setSpecs(data.specs as Spec[]);
       setScenarios(
         (data.scenarios as any[]).map((r) => ({
@@ -207,7 +209,7 @@ function HomePage() {
       );
       setChanges(data.changes as ChangeRecord[]);
     } catch (e) {
-      console.error("Error loading data via fetch proxy:", e);
+      console.error("Error loading data:", e);
       const { data: s } = await supabase.from("specs").select("*");
       const { data: sc } = await supabase.from("scenarios").select("*");
       const { data: ch } = await supabase.from("scenario_changes").select("*");
@@ -263,7 +265,6 @@ function HomePage() {
           content = parsed.content;
           type = parsed.type;
         } catch (parseError) {
-          console.warn("ה-parser נכשל, מנסה קריאה ישירה של קובץ טקסט", parseError);
           content = await file.text();
         }
 
@@ -273,7 +274,12 @@ function HomePage() {
 
         const existingScenarios = [...workingScenarios];
         
-        const result = await generateScenariosServer({
+        const generateScenariosFn = createServerFn("POST", async (payload: { specContent: string; specName: string; system: string; images: string[] }) => {
+          const { generateScenarios } = await import("@/lib/scenarios.functions");
+          return generateScenarios(payload);
+        });
+
+        const result = await generateScenariosFn({
           specContent: content,
           specName: file.name,
           system: meta.system,
@@ -281,7 +287,7 @@ function HomePage() {
         });
         
         if (!Array.isArray(result) || result.length === 0) {
-          throw new Error("לא נוצרו תסריטים מהאפיון. נסו לטעון אפיון מפורט יותר.");
+          throw new Error("לא נוצרו תסריטים מהאפיון.");
         }
 
         const { data: spec, error } = await supabase
@@ -337,7 +343,12 @@ function HomePage() {
 
         if (existingScenarios.length > 0) {
           try {
-            const res = await analyzeChangesServer({
+            const analyzeChangesFn = createServerFn("POST", async (payload: { specContent: string; specName: string; existingScenarios: any[] }) => {
+              const { analyzeChanges } = await import("@/lib/scenarios.functions");
+              return analyzeChanges(payload);
+            });
+
+            const res = await analyzeChangesFn({
               specContent: content,
               specName: file.name,
               existingScenarios: existingScenarios.map((s) => ({
@@ -373,7 +384,7 @@ function HomePage() {
       }
 
       if (detectedChanges > 0) {
-        toast.warning(`זוהו ${detectedChanges} עדכונים מוצעים לתסריטים קיימים`);
+        toast.warning(`זוהו ${detectedChanges} עדכונים מוצעים`);
         setTab("changes");
       } else {
         setTab("scenarios");
@@ -592,7 +603,7 @@ function HomePage() {
           <TabsContent value="scenarios" className="mt-6">
             <Card className="glass-panel rounded-[2rem] p-6">
               <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-                <h3 className="text-lg font-semibold">תסריטי בדיקה בדיקות פעילים במערכת</h3>
+                <h3 className="text-lg font-semibold">תסריטי בדיקה פעילים במערכת</h3>
                 <Input value={specSearch} onChange={(e) => setSpecSearch(e.target.value)} placeholder="חיפוש אפיון..." className="max-w-xs" />
               </div>
               {specs.length === 0 ? (
