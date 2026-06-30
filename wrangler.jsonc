@@ -1,12 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tanstack-start-app",
-  "compatibility_date": "2025-09-24",
-  "compatibility_flags": ["nodejs_compat"],
-  "main": "src/server.ts",
-  "assets": { "dir": ".output/public" },
-  
-  // הצינור שמחבר את האפליקציה ל-AI של Cloudflare
+  "name": "qai",
+  "compatibility_date": "2024-11-01",
+  "pages_build_output_dir": ".output",
   "ai": {
     "binding": "AI"
   }
