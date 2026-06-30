@@ -16,10 +16,12 @@ type ScenarioResult = {
 };
 
 async function callAI(messages: Array<{ role: string; content: string }>, schema: object) {
-  // שליפת ה-Context של הבקשה הנוכחית
   const requestContext = getWebRequestContext() as any;
   
-  // חיפוש ה-Binding לפי השם החדש CF_AI כדי למנוע את ההתנגשות עם מנגנוני OpenAI
+  // בדיקת סטטוס ה-Bindings בשרת
+  const bindingsAvailable = requestContext?.cloudflare?.env ? Object.keys(requestContext.cloudflare.env) : [];
+  const rootEnvAvailable = requestContext?.env ? Object.keys(requestContext.env) : [];
+  
   const aiBinding = 
     requestContext?.cloudflare?.env?.CF_AI || 
     requestContext?.env?.CF_AI ||
@@ -28,8 +30,8 @@ async function callAI(messages: Array<{ role: string; content: string }>, schema
     (globalThis as any).CF_AI;
 
   if (!aiBinding) {
-    console.error("DEBUG - Request Context structure:", JSON.stringify(requestContext));
-    throw new Error("מנגנון ה-AI של Cloudflare לא נמצא ב-Bindings של השרת. ודא שהגדרת את ה-binding ב-wrangler.jsonc תחת השם CF_AI.");
+    // אם ה-AI לא נמצא, אנחנו מחזירים שגיאה סופר מפורטת שתציג לנו הכל במסך!
+    throw new Error(`[DEBUG] הקוד החדש רץ! אבל ה-Binding לא נמצא. ה-Bindings הקיימים בשרת הם: ${JSON.stringify(bindingsAvailable)}. בסביבת השורש: ${JSON.stringify(rootEnvAvailable)}. אנא ודא שרשום CF_AI ב-wrangler.jsonc.`);
   }
 
   const modifiedMessages = [
@@ -259,3 +261,14 @@ export const analyzeChanges = createServerFn({ method: "POST" })
       .join("\n\n");
 
     const result = await callAI(
+      [
+        { role: "system", content: "אתה מומחה QA לתחזוקת תסריטי בדיקה. נתח שינויים והחזר את התוצאה במבנה ה-JSON המדויק המבוקש." },
+        { role: "user", content: `אפיון חדש (${data.specName}):\n${data.specContent.slice(0, 30000)}\n\nתסריטים קיימים:\n${summary.slice(0, 30000)}` },
+      ],
+      changesSchema,
+    );
+    return result as {
+      changes: Array<{ scenario_id: string; reason: string; updated: any }>;
+      new_scenarios: Array<any>;
+    };
+  });
