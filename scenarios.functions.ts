@@ -16,12 +16,20 @@ type ScenarioResult = {
 };
 
 async function callAI(messages: Array<{ role: string; content: string }>, schema: object) {
-  // שליפת ה-Context הרשמי של Cloudflare Pages ישירות מהבקשה הנוכחית
-  const requestContext = getWebRequestContext();
-  const aiBinding = requestContext?.cloudflare?.env?.AI;
+  // שליפת ה-Context של הבקשה הנוכחית
+  const requestContext = getWebRequestContext() as any;
+  
+  // בדיקה מקיפה בכל המיקומים האפשריים שבהם Cloudflare/Nitro חושפים את ה-Bindings
+  const aiBinding = 
+    requestContext?.cloudflare?.env?.AI || 
+    requestContext?.env?.AI ||
+    requestContext?.context?.cloudflare?.env?.AI ||
+    (globalThis as any).process?.env?.AI ||
+    (globalThis as any).AI;
 
   if (!aiBinding) {
-    throw new Error("Cloudflare Workers AI configuration missing in wrangler.jsonc or context");
+    console.error("DEBUG - Request Context structure:", JSON.stringify(requestContext));
+    throw new Error("מנגנון ה-AI של Cloudflare לא נמצא ב-Bindings של השרת. ודא שהגדרת את ה-binding ב-wrangler.jsonc תחת השם AI באותיות גדולות.");
   }
 
   const modifiedMessages = [
@@ -240,25 +248,4 @@ export const analyzeChanges = createServerFn({ method: "POST" })
           }),
         ),
       })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const summary = data.existingScenarios
-      .map(
-        (s) =>
-          `--- מזהה: ${s.id}\nכותרת: ${s.title}\nצעדים:\n${s.steps.map((st, i) => `${i + 1}. ${st}`).join("\n")}`,
-      )
-      .join("\n\n");
-
-    const result = await callAI(
-      [
-        { role: "system", content: "אתה מומחה QA לתחזוקת תסריטי בדיקה. נתח שינויים והחזר את התוצאה במבנה ה-JSON המדויק המבוקש." },
-        { role: "user", content: `אפיון חדש (${data.specName}):\n${data.specContent.slice(0, 30000)}\n\nתסריטים קיימים:\n${summary.slice(0, 30000)}` },
-      ],
-      changesSchema,
-    );
-    return result as {
-      changes: Array<{ scenario_id: string; reason: string; updated: any }>;
-      new_scenarios: Array<any>;
-    };
-  });
+      .
