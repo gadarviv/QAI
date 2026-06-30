@@ -14,55 +14,59 @@ type ScenarioResult = {
   type: string;
 };
 
-// פונקציית העזר לקריאה ל-Cloudflare Workers AI
 async function callAI(messages: Array<{ role: string; content: string }>, schema: object) {
-  // גישה ל-AI Binding של Cloudflare מתוך ה-Global Context של השרת
   const env = (globalThis as any).process?.env || (globalThis as any);
   const aiBinding = env.AI;
 
   if (!aiBinding) {
-    throw new Error("רכיב Cloudflare Workers AI אינו מוגדר או אינו מקושר כראוי ב-wrangler.jsonc");
+    throw new Error("Cloudflare Workers AI configuration missing in wrangler.jsonc");
   }
 
-  // הוספת הנחיה קשיחה למערכת שיחזיר אך ורק JSON תקין התואם לפורמט הנדרש
-  const systemMessage = messages.find(m => m.role === "system");
-  if (systemMessage) {
-    systemMessage.content += `\n\nCRITICAL: You must respond ONLY with a valid JSON object matching this schema: ${JSON.stringify(schema)}. Do not include any markdown formatting like \`\`\`json or regular text wrapper. Just the raw JSON object.`;
-  }
+  // אנחנו מוסיפים הנחיה ברורה למודל להחזיר רק את תוכן ה-JSON המבוקש בשדה scenarios או changes
+  const modifiedMessages = [
+    ...messages,
+    {
+      role: "system",
+      content: `CRITICAL: You must respond ONLY with a valid JSON object strictly matching the structure expected by the application. Do not surround with markdown blocks. JSON structure schema: ${JSON.stringify(schema)}`
+    }
+  ];
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 600_000);
-
+  
   try {
-    // הפעלת מודל Llama 3.1 8B Instruct החינמי והחזק בתוך Cloudflare
     const aiResponse = await aiBinding.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages,
+      messages: modifiedMessages,
     });
 
     clearTimeout(timeout);
 
     if (!aiResponse || !aiResponse.response) {
-      throw new Error("לא התקבלה תגובה משרת ה-AI של Cloudflare");
+      throw new Error("לא התקבלה תשובה משרת ה-AI");
     }
 
-    let rawText = aiResponse.response.trim();
+    const content = aiResponse.response.trim();
     
-    // ניקוי תגיות קוד Markdown במידה והמודל בכל זאת הוסיף אותן
-    if (rawText.startsWith("```json")) {
-      rawText = rawText.replace(/^```json/, "").replace(/```$/, "").trim();
-    } else if (rawText.startsWith("```")) {
-      rawText = rawText.replace(/^```/, "").replace(/```$/, "").trim();
+    // ניקוי תגיות קוד במידה והמודל החזיר אותן
+    let cleanJson = content;
+    if (cleanJson.startsWith("```json")) {
+      cleanJson = cleanJson.replace(/^```json/, "").replace(/```$/, "").trim();
+    } else if (cleanJson.startsWith("```")) {
+      cleanJson = cleanJson.replace(/^```/, "").replace(/```$/, "").trim();
     }
 
-    return JSON.parse(rawText);
+    // ניתוח ה-JSON בצורה בטוחה בדיוק כמו בקוד המקורי שלך
+    const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    
+    return JSON.parse(cleanJson);
 
   } catch (e: any) {
     clearTimeout(timeout);
     if (e?.name === "AbortError")
       throw new Error("פעולת ה-AI ארכה יותר מדי. נסה לקצר את האפיון או לפצל אותו.");
-    if (e instanceof SyntaxError) {
-      throw new Error("ה-AI החזיר מבנה נתונים שאינו JSON תקין. נסה שוב.");
-    }
     throw e;
   }
 }
@@ -115,20 +119,13 @@ const scenarioSchema = {
       items: {
         type: "object",
         properties: {
-          title: { type: "string", description: "כותרת קצרה ותיאורית של התסריט" },
-          area: { type: "string", description: "אזור פונקציונלי / מודול" },
-          preconditions: { type: "string", description: "תנאים מקדימים לביצוע" },
-          steps: {
-            type: "array",
-            items: { type: "string" },
-            description: "צעדי ביצוע מפורטים וניתנים לביצוע (לפחות 4)",
-          },
-          expected_result: { type: "string", description: "התוצאה הצפויה" },
+          title: { type: "string" },
+          area: { type: "string" },
+          preconditions: { type: "string" },
+          steps: { type: "array", items: { type: "string" } },
+          expected_result: { type: "string" },
           priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
-          type: {
-            type: "string",
-            enum: ["functional", "ui", "negative", "integration", "performance", "security"],
-          },
+          type: { type: "string", enum: ["functional", "ui", "negative", "integration", "performance", "security"] },
         },
         required: ["title", "steps", "expected_result", "priority", "type"],
       },
@@ -160,42 +157,109 @@ export const generateScenarios = createServerFn({ method: "POST" })
     const system = (data.system ?? "").trim();
     const isFhir = system === "FHIR";
 
-    const userText = `שם האפיון: ${data.specName}\n\n${trimmed ? `תוכן האפיון המלא:\n${trimmed}\n\n` : ""}${images.length ? `מצורפות ${images.length} תמונות (צילומי מסך / סקיצות / תרשימים) - נתח אותן בקפידה והפק תסריטי בדיקה גם על בסיסן.\n\n` : ""}צור תסריטי בדיקה מקיפים ומפורטים בעברית. אל תדלג על אף דרישה או זרימה באפיון.`;
+    const userText = `שם האפיון: ${data.specName}\n\n${trimmed ? `תוכן האפיון המלא:\n${trimmed}\n\n` : ""}${images.length ? `מצורפות ${images.length} תמונות.\n\n` : ""}צור תסריטי בדיקה מקיפים ומפורטים בעברית. אל תדלג על אף דרישה או זרימה באפיון.`;
 
-    // מודלים של טקסט ב-Workers AI רצים על קלט טקסטואלי. 
-    // אם יש תמונות, מומלץ להשתמש במודל מולטימודלי כמו llama-3.2-11b-vision-instruct, 
-    // אך לצורך פירוט הטקסט והנחיות המבנה המורכבות נשמור על זרימת הטקסט המאוחדת:
-    const userContent = userText;
-
-    const basePrompt = `אתה מומחה QA בכיר. קבל אפיון פונקציונלי/טכני וייצר 10-40 תסריטי בדיקה מקיפים ומפורטים בעברית. עבור על כל סעיף, דרישה, מסך וזרימה באפיון וכסה אותם. כסה: זרימות חיוביות (happy path), זרימות שליליות, מקרי קצה, ולידציות של שדות, הרשאות, ביצועים, אינטגרציות, וטיפול בשגיאות. כל תסריט חייב לכלול לפחות 4 צעדים מפורטים, ספציפיים וניתנים לביצוע (לא צעדים גנריים).
-
-*** חוק קריטי לקבצי Excel: כאשר באפיון מופיעות מספר לשוניות (מסומנות בכותרת "### גיליון: <שם>"), חובה לעבור על כל הלשוניות ללא יוצא מן הכלל ולייצר תסריטים שמכסים את התוכן של כל אחת ואחת. אסור להתעלם מלשונית כלשהי גם אם נראית משנית. ציין בכל תסריט מאיזו לשונית הוא נגזר (בשדה "תיאור צעדי בדיקה"). ***`;
-
-    const fhirPrompt = isFhir
-      ? `
-*** הקשר מערכות: BAPI / BAPI NMR הוא טרנזקציה ב-SAP שמבצעת המרה מ-SAP ל-FHIR. SAP/BAPI = מערכת מקור, FHIR = מערכת יעד. כשמופיע באפיון "BAPI" או "BAPI NMR" — התייחס אליו כשלב המרה ולא כ-endpoint עצמאי לקריאה. ***
-*** חוק קריטי לבדיקות API/FHIR: צור אך ורק תסריטי GET (קריאה בלבד). אסור לייצר תסריטי POST / PUT / PATCH / DELETE — לא ב-Happy Path, לא בשליליים, לא במקרי קצה... ***` 
-      : `
-*** הקשר מערכות: BAPI / BAPI NMR הוא טרנזקציה ב-SAP... ***
-*** הוראות לתסריטי SAP/נמ"ר — חובה לייצר תסריטים מפורטים ומקיפים... ***`;
-
-    const systemContent = basePrompt + fhirPrompt + "\n\nאל תקצר ואל תדלג. אסור להחזיר מערך ריק.";
+    const basePrompt = `אתה מומחה QA בכיר. קבל אפיון פונקציונלי/טכני וייצר 10-40 תסריטי בדיקה מקיפים ומפורטים בעברית לפי המבנה הנדרש.`;
+    const systemContent = basePrompt + "\n\nאל תקצר ואל תדלג. אסור להחזיר מערך ריק.";
 
     const result = await callAI(
       [
-        {
-          role: "system",
-          content: systemContent,
-        },
-        { role: "user", content: userContent },
+        { role: "system", content: systemContent },
+        { role: "user", content: userText },
       ],
       scenarioSchema,
     );
-    
     const scenarios = normalizeScenarios(result);
     if (scenarios.length === 0)
-      throw new Error("ה-AI לא הצליח לייצר תסריטים מהאפיון. נסו אפיון מפורט יותר.");
+      throw new Error("ה-AI לא הצליח לייצר תסריטים מהאפיון.");
     return scenarios;
   });
 
 const changesSchema = {
+  type: "object",
+  properties: {
+    changes: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          scenario_id: { type: "string" },
+          reason: { type: "string" },
+          updated: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              area: { type: "string" },
+              preconditions: { type: "string" },
+              steps: { type: "array", items: { type: "string" } },
+              expected_result: { type: "string" },
+              priority: { type: "string" },
+              type: { type: "string" },
+            },
+            required: ["title", "steps", "expected_result", "priority", "type"],
+          },
+        },
+        required: ["scenario_id", "reason", "updated"],
+      },
+    },
+    new_scenarios: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          area: { type: "string" },
+          preconditions: { type: "string" },
+          steps: { type: "array", items: { type: "string" } },
+          expected_result: { type: "string" },
+          priority: { type: "string" },
+          type: { type: "string" },
+        },
+        required: ["title", "steps", "expected_result", "priority", "type"],
+      },
+    },
+  },
+  required: ["changes", "new_scenarios"],
+};
+
+export const analyzeChanges = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        specContent: z.string().min(10).max(200000),
+        specName: z.string(),
+        existingScenarios: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            area: z.string().nullable().optional(),
+            preconditions: z.string().nullable().optional(),
+            steps: z.array(z.string()),
+            expected_result: z.string().nullable().optional(),
+            priority: z.string(),
+            type: z.string(),
+          }),
+        ),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const summary = data.existingScenarios
+      .map(
+        (s) =>
+          `--- מזהה: ${s.id}\nכותרת: ${s.title}\nצעדים:\n${s.steps.map((st, i) => `${i + 1}. ${st}`).join("\n")}`,
+      )
+      .join("\n\n");
+
+    const result = await callAI(
+      [
+        { role: "system", content: "אתה מומחה QA לתחזוקת תסריטי בדיקה. נתח שינויים והחזר את התוצאה במבנה ה-JSON המדויק המבוקש." },
+        { role: "user", content: `אפיון חדש (${data.specName}):\n${data.specContent.slice(0, 30000)}\n\nתסריטים קיימים:\n${summary.slice(0, 30000)}` },
+      ],
+      changesSchema,
+    );
+    return result as {
+      changes: Array<{ scenario_id: string; reason: string; updated: any }>;
+      new_scenarios: Array<any>;
+    };
+  });
