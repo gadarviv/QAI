@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getWebRequestContext } from "@tanstack/react-start/server";
 import { z } from "zod";
 
 const MAX_SPEC_CHARS = 50_000;
@@ -15,14 +16,14 @@ type ScenarioResult = {
 };
 
 async function callAI(messages: Array<{ role: string; content: string }>, schema: object) {
-  const env = (globalThis as any).process?.env || (globalThis as any);
-  const aiBinding = env.AI;
+  // שליפת ה-Context הרשמי של Cloudflare Pages ישירות מהבקשה הנוכחית
+  const requestContext = getWebRequestContext();
+  const aiBinding = requestContext?.cloudflare?.env?.AI;
 
   if (!aiBinding) {
-    throw new Error("Cloudflare Workers AI configuration missing in wrangler.jsonc");
+    throw new Error("Cloudflare Workers AI configuration missing in wrangler.jsonc or context");
   }
 
-  // אנחנו מוסיפים הנחיה ברורה למודל להחזיר רק את תוכן ה-JSON המבוקש בשדה scenarios או changes
   const modifiedMessages = [
     ...messages,
     {
@@ -47,7 +48,6 @@ async function callAI(messages: Array<{ role: string; content: string }>, schema
 
     const content = aiResponse.response.trim();
     
-    // ניקוי תגיות קוד במידה והמודל החזיר אותן
     let cleanJson = content;
     if (cleanJson.startsWith("```json")) {
       cleanJson = cleanJson.replace(/^```json/, "").replace(/```$/, "").trim();
@@ -55,7 +55,6 @@ async function callAI(messages: Array<{ role: string; content: string }>, schema
       cleanJson = cleanJson.replace(/^```/, "").replace(/```$/, "").trim();
     }
 
-    // ניתוח ה-JSON בצורה בטוחה בדיוק כמו בקוד המקורי שלך
     const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
