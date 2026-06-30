@@ -1,38 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { listSystemCatalog, getMe } from "@/lib/admin.functions";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Upload,
-  FileText,
   Sparkles,
-  Download,
-  RefreshCw,
   AlertTriangle,
   Check,
   X,
   Trash2,
   Loader2,
   ListChecks,
-  FileSearch,
-  ImagePlus,
-  ChevronDown,
-  Plus,
-  Play,
 } from "lucide-react";
-import { Textarea } from "@/components/ui/textarea";
-
-import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -42,31 +22,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { parseFile } from "@/lib/file-parser";
-import { exportScenariosToExcel } from "@/lib/excel-export";
-import { generateScenarios, analyzeChanges } from "@/lib/scenarios.functions";
-import {
-  exportScenariosToMonday,
-  listMondayFileSpecs,
-  downloadMondayAsset,
-} from "@/lib/monday.functions";
-import { getAppData } from "@/lib/app-data.functions";
-import { runFhirRequest } from "@/lib/fhir-test.functions";
-import { parseFhirScenario, buildPostmanCollection, isFhirScenario } from "@/lib/fhir-test";
-import { BatteryProgress } from "@/components/BatteryProgress";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { parseFile } from "@/lib/file-parser";
+import { generateScenarios, analyzeChanges } from "@/lib/scenarios.functions";
+import { listMondayFileSpecs, downloadMondayAsset } from "@/lib/monday.functions";
+import { getAppData } from "@/lib/app-data.functions";
+import { BatteryProgress } from "@/components/BatteryProgress";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MondayAuthButton, useMondayUser } from "@/components/MondayAuth";
-
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogTrigger,
-  DialogDescription,
-} from "@/components/ui/dialog";
 
 const SYSTEMS = ['נמ"ר', "מזור", 'אל"ה', "רקמה", "CoView", "FHIR"] as const;
 const MODULES_BY_SYSTEM: Record<string, string[]> = {
@@ -117,29 +86,6 @@ interface ChangeRecord {
   status: string;
   created_at: string;
 }
-
-const PRIORITY_LABEL: Record<string, string> = {
-  low: "נמוכה",
-  medium: "בינונית",
-  high: "גבוהה",
-  critical: "קריטית",
-};
-
-const PRIORITY_STYLE: Record<string, string> = {
-  low: "bg-muted text-muted-foreground",
-  medium: "bg-accent text-accent-foreground",
-  high: "bg-[oklch(0.95_0.1_75)] text-[oklch(0.4_0.15_60)]",
-  critical: "bg-[oklch(0.93_0.13_25)] text-[oklch(0.4_0.2_25)]",
-};
-
-const TYPE_LABEL: Record<string, string> = {
-  functional: "פונקציונלי",
-  ui: "ממשק",
-  negative: "שלילי",
-  integration: "אינטגרציה",
-  performance: "ביצועים",
-  security: "אבטחה",
-};
 
 function Stat({ n, label, highlight = false }: { n: number; label: string; highlight?: boolean }) {
   return (
@@ -203,21 +149,9 @@ function HomePage() {
 
   const [tab, setTab] = useState("upload");
   const fileRef = useRef<HTMLInputElement>(null);
-  const imageRef = useRef<HTMLInputElement>(null);
   const includeImagesRef = useRef<boolean>(true);
   const mondayItemMapRef = useRef<Map<string, string>>(new Map());
-  const [images, setImages] = useState<{ name: string; dataUrl: string }[]>([]);
-  const [chooserOpen, setChooserOpen] = useState(false);
-  const [mondayImportOpen, setMondayImportOpen] = useState(false);
-  const [mondayBoardId, setMondayBoardId] = useState("");
-  const [mondayStatus, setMondayStatus] = useState("מוכן לבדיקה");
-  type MondayMatch = { itemId: string; itemName: string; assets: { id: string; name: string }[] };
-  const [mondayPreview, setMondayPreview] = useState<{
-    fresh: MondayMatch[];
-    skipped: MondayMatch[];
-  } | null>(null);
-  const [mondaySelected, setMondaySelected] = useState<Set<string>>(new Set());
-  const [mondayLoadingPreview, setMondayLoadingPreview] = useState(false);
+  const [images] = useState<{ name: string; dataUrl: string }[]>([]);
   const [meta, setMeta] = useState<{
     system: string;
     module: string;
@@ -230,22 +164,16 @@ function HomePage() {
     implementer: "",
   });
   const [drag, setDrag] = useState(false);
-  const [appendTarget, setAppendTarget] = useState<Spec | null>(null);
-  const [expandedSpecs, setExpandedSpecs] = useState<Set<string>>(new Set());
   const [specSearch, setSpecSearch] = useState("");
-  const appendFileRef = useRef<HTMLInputElement>(null);
-  const appendImageRef = useRef<HTMLInputElement>(null);
 
-  const genFn = useServerFn(generateScenarios);
-  const analyzeFn = useServerFn(analyzeChanges);
-  const listSystemCatalogFn = useServerFn(listSystemCatalog);
-  const getMeFn = useServerFn(getMe);
-  
   const { data: catalogSystems = [] } = useQuery({
     queryKey: ["system_catalog"],
-    queryFn: () => listSystemCatalogFn(),
+    queryFn: () => listSystemCatalog(),
   });
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => getMeFn() });
+  const { data: me } = useQuery({ 
+    queryKey: ["me"], 
+    queryFn: () => getMe() 
+  });
   
   const allSystems = Array.from(
     new Set<string>([...SYSTEMS, ...catalogSystems.map((c: any) => c.name)]),
@@ -261,104 +189,8 @@ function HomePage() {
     }
   }, [me]);
 
-  const listMondayFn = useServerFn(listMondayFileSpecs);
-  const downloadMondayFn = useServerFn(downloadMondayAsset);
-
-  const handleMondayImport = async () => {
-    if (!validateMeta()) return;
-    if (!/^\d+$/.test(mondayBoardId.trim())) {
-      toast.error("Board ID חייב להיות מספרי");
-      return;
-    }
-    if (!mondayStatus.trim()) {
-      toast.error("יש לבחור סטטוס");
-      return;
-    }
-    setMondayLoadingPreview(true);
-    try {
-      toast.info("שואב פריטים מ-Monday...");
-      const { matches } = await listMondayFn({
-        data: { boardId: mondayBoardId.trim(), statusLabel: mondayStatus.trim() },
-      });
-      if (!matches || matches.length === 0) {
-        toast.error(`לא נמצאו פריטים עם קבצים בסטטוס "${mondayStatus}"`);
-        return;
-      }
-
-      const itemIds = matches.map((m) => m.itemId);
-      const { data: existingSpecs } = await supabase
-        .from("specs")
-        .select("monday_item_id")
-        .in("monday_item_id", itemIds);
-      const alreadyImported = new Set(
-        (existingSpecs ?? []).map((s: any) => s.monday_item_id).filter(Boolean),
-      );
-
-      const skipped = matches.filter((m) => alreadyImported.has(m.itemId));
-      const fresh = matches.filter((m) => !alreadyImported.has(m.itemId));
-
-      setMondayImportOpen(false);
-      setMondayPreview({ fresh, skipped });
-      setMondaySelected(new Set(fresh.map((m) => m.itemId)));
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message ?? "שגיאה בייבוא מ-Monday");
-    } finally {
-      setMondayLoadingPreview(false);
-    }
-  };
-
-  const handleMondayConfirm = async () => {
-    if (!mondayPreview) return;
-    const selectedItems = mondayPreview.fresh.filter((m) => mondaySelected.has(m.itemId));
-    if (selectedItems.length === 0) {
-      toast.error("בחר לפחות אפיון אחד לייבוא");
-      return;
-    }
-    setMondayPreview(null);
-    setBusy(true);
-    try {
-      mondayItemMapRef.current.clear();
-      const files: File[] = [];
-      for (const m of selectedItems) {
-        for (const a of m.assets) {
-          try {
-            const dl = await downloadMondayFn({ data: { assetId: a.id } });
-            const bin = atob(dl.base64);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            const fname = `${m.itemName} — ${dl.name}`;
-            const file = new File([bytes], fname, { type: dl.mimeType });
-            files.push(file);
-            mondayItemMapRef.current.set(fname, m.itemId);
-          } catch (err: any) {
-            console.error(err);
-            toast.error(`כשל בהורדת ${a.name}: ${err?.message ?? ""}`);
-          }
-        }
-      }
-      if (files.length === 0) {
-        toast.error("לא הצלחנו להוריד אף קובץ");
-        return;
-      }
-      const dt = new DataTransfer();
-      for (const f of files) dt.items.add(f);
-      includeImagesRef.current = false;
-      toast.success(`הורדו ${files.length} קבצים מ-Monday`);
-      await handleFiles(dt.files);
-      mondayItemMapRef.current.clear();
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message ?? "שגיאה בייבוא מ-Monday");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const getDataFn = useServerFn(getAppData);
-
   const loadAll = useCallback(async () => {
-    const data = await getDataFn();
+    const data = await getAppData();
     setSpecs(data.specs as Spec[]);
     setScenarios(
       (data.scenarios as any[]).map((r) => ({
@@ -367,49 +199,11 @@ function HomePage() {
       })),
     );
     setChanges(data.changes as ChangeRecord[]);
-  }, [getDataFn]);
+  }, []);
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
-
-  const fileToDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(objectUrl);
-        const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.72));
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        reject(new Error("לא ניתן לקרוא את התמונה"));
-      };
-      img.src = objectUrl;
-    });
-
-  const handleImageFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const added: { name: string; dataUrl: string }[] = [];
-    for (const f of Array.from(files)) {
-      if (!/^image\/(png|jpe?g|webp)$/i.test(f.type)) {
-        toast.error(`התמונה ${f.name} אינה בפורמט נתמך`);
-        continue;
-      }
-      if (f.size > 10 * 1024 * 1024) {
-        toast.error(`התמונה ${f.name} גדולה מ-10MB`);
-        continue;
-      }
-      added.push({ name: f.name, dataUrl: await fileToDataUrl(f) });
-    }
-    setImages((prev) => [...prev, ...added].slice(0, 8));
-    if (imageRef.current) imageRef.current.value = "";
-  };
 
   const validateMeta = () => {
     if (!meta.system) {
@@ -430,61 +224,6 @@ function HomePage() {
       return false;
     }
     return true;
-  };
-
-  const generateFromImagesOnly = async () => {
-    if (images.length === 0) return toast.error("יש לצרף תמונה אחת לפחות");
-    if (!validateMeta()) return;
-    setBusy(true);
-    try {
-      const specName = `תסריטים מתמונה - ${new Date().toLocaleString("he-IL")}`;
-      const imageUrls = images.map((i) => i.dataUrl);
-      const result = await genFn({ data: { specContent: "", specName, system: meta.system, images: imageUrls } });
-      if (!Array.isArray(result) || result.length === 0)
-        throw new Error("לא נוצרו תסריטים מהתמונות");
-
-      const { data: spec, error } = await supabase
-        .from("specs")
-        .insert({
-          name: specName,
-          content: `(נוצר מ-${images.length} תמונות)\n` + images.map((i) => i.name).join("\n"),
-          file_type: "image",
-          system: meta.system,
-          module: meta.module || null,
-          tester: meta.tester.trim(),
-          implementer: meta.implementer.trim(),
-          created_by_monday_user_id: mondayUser?.mondayUserId ?? null,
-        })
-        .select()
-        .single();
-      if (error || !spec) throw error ?? new Error("שגיאה בשמירה");
-
-      const { error: scenarioError } = await supabase.from("scenarios").insert(
-        result.map((r) => ({
-          spec_id: spec.id,
-          title: r.title,
-          area: r.area ?? null,
-          preconditions: r.preconditions ?? null,
-          steps: r.steps,
-          expected_result: r.expected_result,
-          priority: r.priority,
-          type: r.type,
-        })),
-      );
-      if (scenarioError) {
-        await supabase.from("specs").delete().eq("id", spec.id);
-        throw scenarioError;
-      }
-      toast.success(`נוצרו ${result.length} תסריטים מהתמונות`);
-      setImages([]);
-      setTab("scenarios");
-      await loadAll();
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message ?? "שגיאה בעיבוד התמונות");
-    } finally {
-      setBusy(false);
-    }
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -518,7 +257,8 @@ function HomePage() {
 
         const existingScenarios = [...workingScenarios];
         
-        const result = await genFn({
+        // קריאה ישירה לפונקציית השרת ללא useServerFn ששובר את הפלאגין של הראוטר
+        const result = await generateScenarios({
           data: { specContent: content, specName: file.name, system: meta.system, images: attachedImages },
         });
         
@@ -579,7 +319,7 @@ function HomePage() {
 
         if (existingScenarios.length > 0) {
           try {
-            const res = await analyzeFn({
+            const res = await analyzeChanges({
               data: {
                 specContent: content,
                 specName: file.name,
@@ -621,7 +361,6 @@ function HomePage() {
       } else {
         setTab("scenarios");
       }
-      setImages([]);
       await loadAll();
     } catch (e: any) {
       console.error(e);
@@ -629,61 +368,6 @@ function HomePage() {
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
-    }
-  };
-
-  const appendScenariosToSpec = async (
-    target: Spec,
-    args: { specContent: string; specName: string; images: string[]; appendedContent?: string },
-  ) => {
-    setBusy(true);
-    try {
-      const result = await genFn({
-        data: {
-          specContent: args.specContent,
-          specName: args.specName,
-          images: args.images,
-        },
-      });
-      if (!Array.isArray(result) || result.length === 0) {
-        throw new Error("לא נוצרו תסריטים נוספים");
-      }
-      const { error: scenarioError } = await supabase.from("scenarios").insert(
-        result.map((r) => ({
-          spec_id: target.id,
-          title: r.title,
-          area: r.area ?? null,
-          preconditions: r.preconditions ?? null,
-          steps: r.steps,
-          expected_result: r.expected_result,
-          priority: r.priority,
-          type: r.type,
-        })),
-      );
-      if (scenarioError) throw scenarioError;
-
-      if (args.appendedContent) {
-        const { data: existing } = await supabase
-          .from("specs")
-          .select("content")
-          .eq("id", target.id)
-          .single();
-        const merged =
-          ((existing as any)?.content ?? "") + `\n\n--- תוספת (${args.specName}) ---\n` + args.appendedContent;
-        await supabase.from("specs").update({ content: merged }).eq("id", target.id);
-      }
-
-      toast.success(`נוספו ${result.length} תסריטים לאפיון "${target.name}"`);
-      setAppendTarget(null);
-      setTab("scenarios");
-      await loadAll();
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message ?? "שגיאה בהוספת תסריטים");
-    } finally {
-      setBusy(false);
-      if (appendFileRef.current) appendFileRef.current.value = "";
-      if (appendImageRef.current) appendImageRef.current.value = "";
     }
   };
 
@@ -862,7 +546,7 @@ function HomePage() {
                 <Sparkles className="h-5 w-5" />
               </div>
               <h3 className="text-lg font-semibold">טעינת אפיון</h3>
-              <p className="mt-1 max-w-4xl text-right text-sm leading-7 text-muted-foreground [text-wrap:pretty] md:mr-0 md:ml-auto">
+              <p className="mt-1 max-w-4xl text-right text-sm leading-7 text-muted-foreground [text-wrap:pretty]">
                 טענו קובץ אפיון פונקציונלי או טכני (PDF / Word / טקסט) ומלאו את מאפייני האפיון.
                 המערכת תייצר תסריטי בדיקה חדשים, ובמקביל תבדוק האם האפיון משפיע על תסריטים קיימים
                 ותציע עדכונים.
