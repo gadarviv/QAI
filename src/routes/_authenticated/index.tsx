@@ -30,12 +30,25 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { parseFile } from "@/lib/file-parser";
+import { createServerFn } from "@tanstack/react-start";
 import { generateScenarios, analyzeChanges } from "@/lib/scenarios.functions";
-import { listMondayFileSpecs, downloadMondayAsset } from "@/lib/monday.functions";
 import { getAppData } from "@/lib/app-data.functions";
 import { BatteryProgress } from "@/components/BatteryProgress";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MondayAuthButton, useMondayUser } from "@/components/MondayAuth";
+
+// הגדרת פונקציות שרת עטופות בצורה רשמית מחוץ לקומפוננטה כדי ש-Rollup יזהה אותן כראוי כנקודות קצה של השרת
+const serverGenerateScenarios = createServerFn("POST", async (payload: any) => {
+  return generateScenarios(payload);
+});
+
+const serverAnalyzeChanges = createServerFn("POST", async (payload: any) => {
+  return analyzeChanges(payload);
+});
+
+const serverGetAppData = createServerFn("GET", async () => {
+  return getAppData();
+});
 
 const SYSTEMS = ['נמ"ר', "מזור", 'אל"ה', "רקמה", "CoView", "FHIR"] as const;
 const MODULES_BY_SYSTEM: Record<string, string[]> = {
@@ -190,7 +203,7 @@ function HomePage() {
   }, [me]);
 
   const loadAll = useCallback(async () => {
-    const data = await getAppData();
+    const data = await serverGetAppData();
     setSpecs(data.specs as Spec[]);
     setScenarios(
       (data.scenarios as any[]).map((r) => ({
@@ -257,8 +270,8 @@ function HomePage() {
 
         const existingScenarios = [...workingScenarios];
         
-        // קריאה ישירה לפונקציית השרת ללא useServerFn ששובר את הפלאגין של הראוטר
-        const result = await generateScenarios({
+        // קריאה דרך המעטפת הרישמית של TanStack Start
+        const result = await serverGenerateScenarios({
           data: { specContent: content, specName: file.name, system: meta.system, images: attachedImages },
         });
         
@@ -319,7 +332,7 @@ function HomePage() {
 
         if (existingScenarios.length > 0) {
           try {
-            const res = await analyzeChanges({
+            const res = await serverAnalyzeChanges({
               data: {
                 specContent: content,
                 specName: file.name,
