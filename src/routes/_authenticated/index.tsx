@@ -1,8 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/start";
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { listSystemCatalog, getMe } from "@/lib/admin.functions";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload,
@@ -170,52 +167,17 @@ function HomePage() {
   const [drag, setDrag] = useState(false);
   const [specSearch, setSpecSearch] = useState("");
 
-  const { data: catalogSystems = [] } = useQuery({
-    queryKey: ["system_catalog"],
-    queryFn: () => listSystemCatalog(),
-  });
-  const { data: me } = useQuery({ 
-    queryKey: ["me"], 
-    queryFn: () => getMe() 
-  });
-  
-  const allSystems = Array.from(
-    new Set<string>([...SYSTEMS, ...catalogSystems.map((c: any) => c.name)]),
-  );
-
-  useEffect(() => {
-    if (!me || me.is_admin) return;
-    const assigned = (me.systems ?? []).map((s: any) => s.name);
-    if (assigned.length === 1) {
-      setMeta((m) => ({ ...m, system: assigned[0], module: "" }));
-    } else if (assigned.length === 0) {
-      setMeta((m) => ({ ...m, system: "", module: "" }));
-    }
-  }, [me]);
-
   const loadAll = useCallback(async () => {
     try {
-      const getAppDataFn = createServerFn("GET", async () => {
-        const { getAppData } = await import("@/lib/app-data.functions");
-        return getAppData();
-      });
-      const data = await getAppDataFn();
-      setSpecs(data.specs as Spec[]);
-      setScenarios(
-        (data.scenarios as any[]).map((r) => ({
-          ...r,
-          steps: Array.isArray(r.steps) ? r.steps : [],
-        })),
-      );
-      setChanges(data.changes as ChangeRecord[]);
-    } catch (e) {
-      console.error("Error loading data:", e);
-      const { data: s } = await supabase.from("specs").select("*");
+      const { data: s } = await supabase.from("specs").select("*").order("created_at", { ascending: false });
       const { data: sc } = await supabase.from("scenarios").select("*");
       const { data: ch } = await supabase.from("scenario_changes").select("*");
+      
       if (s) setSpecs(s as Spec[]);
       if (sc) setScenarios((sc as any[]).map(r => ({ ...r, steps: Array.isArray(r.steps) ? r.steps : [] })));
       if (ch) setChanges(ch as ChangeRecord[]);
+    } catch (e) {
+      console.error("Error loading data from client Supabase:", e);
     }
   }, []);
 
@@ -242,6 +204,14 @@ function HomePage() {
       return false;
     }
     return true;
+  };
+
+  const callAiEdgeFunction = async (functionName: string, payload: any) => {
+    const { data, error } = await supabase.functions.invoke(functionName, {
+      body: payload,
+    });
+    if (error) throw error;
+    return data;
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -274,12 +244,8 @@ function HomePage() {
 
         const existingScenarios = [...workingScenarios];
         
-        const generateScenariosFn = createServerFn("POST", async (payload: { specContent: string; specName: string; system: string; images: string[] }) => {
-          const { generateScenarios } = await import("@/lib/scenarios.functions");
-          return generateScenarios(payload);
-        });
-
-        const result = await generateScenariosFn({
+        // קריאה ישירה לפונקציית ה-Edge של Supabase ללא TanStack Start functions
+        const result = await callAiEdgeFunction("generate-scenarios", {
           specContent: content,
           specName: file.name,
           system: meta.system,
@@ -343,12 +309,7 @@ function HomePage() {
 
         if (existingScenarios.length > 0) {
           try {
-            const analyzeChangesFn = createServerFn("POST", async (payload: { specContent: string; specName: string; existingScenarios: any[] }) => {
-              const { analyzeChanges } = await import("@/lib/scenarios.functions");
-              return analyzeChanges(payload);
-            });
-
-            const res = await analyzeChangesFn({
+            const res = await callAiEdgeFunction("analyze-changes", {
               specContent: content,
               specName: file.name,
               existingScenarios: existingScenarios.map((s) => ({
@@ -560,7 +521,7 @@ function HomePage() {
                   <Select value={meta.system} onValueChange={(v) => setMeta(m => ({ ...m, system: v, module: "" }))}>
                     <SelectTrigger className="bg-background/50 backdrop-blur"><SelectValue placeholder="בחר מערכת" /></SelectTrigger>
                     <SelectContent>
-                      {allSystems.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      {SYSTEMS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
