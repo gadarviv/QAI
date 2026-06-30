@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/start";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listSystemCatalog, getMe } from "@/lib/admin.functions";
@@ -38,21 +37,8 @@ import { BatteryProgress } from "@/components/BatteryProgress";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MondayAuthButton, useMondayUser } from "@/components/MondayAuth";
 
-// הגדרת קריאות השרת המאובטחות (ללא שבירת Rollup)
-const generateScenariosServer = createServerFn("POST", async (payload: { specContent: string; specName: string; system: string; images: string[] }) => {
-  const { generateScenarios } = await import("@/lib/scenarios.functions");
-  return generateScenarios(payload);
-});
-
-const analyzeChangesServer = createServerFn("POST", async (payload: { specContent: string; specName: string; existingScenarios: any[] }) => {
-  const { analyzeChanges } = await import("@/lib/scenarios.functions");
-  return analyzeChanges(payload);
-});
-
-const getAppDataServer = createServerFn("GET", async () => {
-  const { getAppData } = await import("@/lib/app-data.functions");
-  return getAppData();
-});
+// ייבוא פונקציות השרת מהקובץ המבודד החדש
+import { generateScenariosServer, analyzeChangesServer, getAppDataServer } from "@/lib/server-functions";
 
 const SYSTEMS = ['נמ"ר', "מזור", 'אל"ה', "רקמה", "CoView", "FHIR"] as const;
 const MODULES_BY_SYSTEM: Record<string, string[]> = {
@@ -121,12 +107,11 @@ function HomePage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [changes, setChanges] = useState<ChangeRecord[]>([]);
   const [busy, setBusy] = useState(false);
-  const [showModal, setShowModal] = useState(false); // ניהול מודאל בחירת מקור קלט קובץ
+  const [showModal, setShowModal] = useState(false);
 
   const [progress, setProgress] = useState(0);
   const [progressVisible, setProgressVisible] = useState(false);
 
-  // סינון מדויק של פריטים ממתינים בלבד לפתרון באג ה-23
   const pendingChangesCount = changes.filter((c) => c.status === "pending").length;
 
   useEffect(() => {
@@ -397,7 +382,7 @@ function HomePage() {
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message ?? "שגיאה בעיבוד הקובץ");
-    } finaly {
+    } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -472,7 +457,6 @@ function HomePage() {
       <ThemeToggle />
       <BatteryProgress visible={progressVisible} progress={progress} />
 
-      {/* תפריט צד ימין קבוע חזותית */}
       <aside className="fixed right-4 top-1/2 z-30 -translate-y-1/2">
         <div className="glass-panel flex flex-col items-stretch gap-1 rounded-2xl p-2 shadow-lg backdrop-blur">
           <button
@@ -517,7 +501,6 @@ function HomePage() {
         </div>
       </aside>
 
-      {/* כותרת עליונה */}
       <header className="relative overflow-hidden">
         <div className="absolute inset-0 opacity-90" style={{ background: "var(--gradient-hero)" }} />
         <div className="relative mx-auto max-w-6xl px-6 py-8 text-primary-foreground">
@@ -541,11 +524,9 @@ function HomePage() {
         </div>
       </header>
 
-      {/* אזור ראשי */}
       <main className="relative z-10 mx-auto max-w-6xl px-6 py-10 pl-6 pr-6 lg:pl-6 lg:pr-44">
         <Tabs value={tab} onValueChange={setTab} dir="rtl">
           <TabsContent value="upload" className="mt-6 space-y-6">
-            {/* פאנל טעינת אפיון - שחזור מדוייק לפי image_49f4f7.png */}
             <Card
               className={`glass-panel relative overflow-hidden rounded-[2rem] p-6 text-right transition-all hover:shadow-[var(--shadow-elegant)] ${
                 drag ? "ring-2 ring-primary" : ""
@@ -562,7 +543,6 @@ function HomePage() {
                 טענו קובץ אפיון פונקציונלי או טכני (PDF / Word / טקסט) ומלאו את מאפייני האפיון. המערכת תייצר תסריטי בדיקה חדשים, ובמקביל תבדוק האם האפיון משפיע על תסריטים קיימים ותציע עדכונים.
               </p>
 
-              {/* גריד שדות - 4 עמודות מדויק כמו ב-image_49f4f7.png */}
               <div dir="rtl" className="mt-8 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-2">
                   <Label className="font-bold">מערכת</Label>
@@ -596,7 +576,6 @@ function HomePage() {
                 </div>
               </div>
 
-              {/* תיבת העלאה תחתונה כפי שמופיעה ב-image_49f4f7.png */}
               <div className="mt-8 flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/20 rounded-2xl p-10 transition hover:border-primary/40 bg-muted/5">
                 <Upload className="h-10 w-10 text-muted-foreground/40 mb-3" />
                 <p className="text-base font-bold mb-1">גרור קובץ לכאן או לחץ לבחירה</p>
@@ -610,11 +589,10 @@ function HomePage() {
             </Card>
           </TabsContent>
 
-          {/* תסריטים פעילים */}
           <TabsContent value="scenarios" className="mt-6">
             <Card className="glass-panel rounded-[2rem] p-6">
               <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-                <h3 className="text-lg font-semibold">תסריטי בדיקה פעילים במערכת</h3>
+                <h3 className="text-lg font-semibold">תסריטי בדיקה בדיקות פעילים במערכת</h3>
                 <Input value={specSearch} onChange={(e) => setSpecSearch(e.target.value)} placeholder="חיפוש אפיון..." className="max-w-xs" />
               </div>
               {specs.length === 0 ? (
@@ -646,7 +624,6 @@ function HomePage() {
             </Card>
           </TabsContent>
 
-          {/* עדכונים ממתינים */}
           <TabsContent value="changes" className="mt-6">
             <Card className="glass-panel rounded-[2rem] p-6">
               <h3 className="text-lg font-semibold mb-4">שינויים ועדכונים ממתינים לאישור</h3>
@@ -676,7 +653,6 @@ function HomePage() {
         </Tabs>
       </main>
 
-      {/* שחזור מודאל בחירת סוג קלט מדויק - לפי תמונה image_49f8b5.png */}
       <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -701,7 +677,6 @@ function HomePage() {
               </div>
 
               <div className="mt-4 space-y-3">
-                {/* אפשרות 1: תמונות אופציונלי */}
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); fileRef.current?.click(); }}
@@ -717,7 +692,6 @@ function HomePage() {
                   <Badge variant="secondary" className="gap-1"><Sparkles className="h-3 w-3" /> צירוף תמונות</Badge>
                 </button>
 
-                {/* אפשרות 2: אפיון + תמונות */}
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); fileRef.current?.click(); }}
@@ -730,7 +704,6 @@ function HomePage() {
                   </div>
                 </button>
 
-                {/* אפשרות 3: אפיון בלבד */}
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); fileRef.current?.click(); }}
@@ -743,7 +716,6 @@ function HomePage() {
                   </div>
                 </button>
 
-                {/* אפשרות 4: תמונות בלבד */}
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); fileRef.current?.click(); }}
@@ -756,7 +728,6 @@ function HomePage() {
                   </div>
                 </button>
 
-                {/* אפשרות 5: ייבוא מ-Monday */}
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); toast.info("מתחבר ל-Monday..."); }}
