@@ -16,7 +16,8 @@ export default defineConfig({
     define: {
       "process.env.SUPABASE_PROJECT_ID": JSON.stringify("swyddxzpulyqfmgtwdno"),
       "process.env.SUPABASE_URL": JSON.stringify("https://swyddxzpulyqfmgtwdno.supabase.co"),
-      "process.env.SUPABASE_PUBLISHABLE_KEY": JSON.stringify("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3eWRkeHpwdWx5cWZtZ3R3ZG5vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2Mjg2MzQsImV4cCI6MjA5NDIwNDYzNH0.A45vzBkNUzxqv1X6ZwKLNSwEZ_XMalJBVeRqLd56cCs")
+      "process.env.SUPABASE_PUBLISHABLE_KEY": JSON.stringify("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3eWRkeHpwdWx5cWZtZ3R3ZG5vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2Mjg2MzQsImV4cCI6MjA5NDIwNDYzNH0.A45vzBkNUzxqv1X6ZwKLNSwEZ_XMalJBVeRqLd56cCs"),
+      "process.env.LOVABLE_API_KEY": JSON.stringify("true")
     }
   }
 });
