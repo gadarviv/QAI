@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/start";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listSystemCatalog, getMe } from "@/lib/admin.functions";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload,
   Sparkles,
@@ -12,6 +13,9 @@ import {
   Trash2,
   Loader2,
   ListChecks,
+  FileText,
+  Image as ImageIcon,
+  ArrowRightLeft,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,6 +37,22 @@ import { parseFile } from "@/lib/file-parser";
 import { BatteryProgress } from "@/components/BatteryProgress";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MondayAuthButton, useMondayUser } from "@/components/MondayAuth";
+
+// הגדרת קריאות השרת המאובטחות (ללא שבירת Rollup)
+const generateScenariosServer = createServerFn("POST", async (payload: { specContent: string; specName: string; system: string; images: string[] }) => {
+  const { generateScenarios } = await import("@/lib/scenarios.functions");
+  return generateScenarios(payload);
+});
+
+const analyzeChangesServer = createServerFn("POST", async (payload: { specContent: string; specName: string; existingScenarios: any[] }) => {
+  const { analyzeChanges } = await import("@/lib/scenarios.functions");
+  return analyzeChanges(payload);
+});
+
+const getAppDataServer = createServerFn("GET", async () => {
+  const { getAppData } = await import("@/lib/app-data.functions");
+  return getAppData();
+});
 
 const SYSTEMS = ['נמ"ר', "מזור", 'אל"ה', "רקמה", "CoView", "FHIR"] as const;
 const MODULES_BY_SYSTEM: Record<string, string[]> = {
@@ -101,9 +121,13 @@ function HomePage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [changes, setChanges] = useState<ChangeRecord[]>([]);
   const [busy, setBusy] = useState(false);
+  const [showModal, setShowModal] = useState(false); // ניהול מודאל בחירת מקור קלט קובץ
 
   const [progress, setProgress] = useState(0);
   const [progressVisible, setProgressVisible] = useState(false);
+
+  // סינון מדויק של פריטים ממתינים בלבד לפתרון באג ה-23
+  const pendingChangesCount = changes.filter((c) => c.status === "pending").length;
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -157,8 +181,8 @@ function HomePage() {
   }>({
     system: "",
     module: "",
-    tester: "",
-    implementer: "",
+    tester: "גד",
+    implementer: "גד",
   });
   const [drag, setDrag] = useState(false);
   const [specSearch, setSpecSearch] = useState("");
@@ -188,11 +212,7 @@ function HomePage() {
 
   const loadAll = useCallback(async () => {
     try {
-      // קריאה מאובטחת דרך fetch כדי למנוע מ-Rollup לנסות לארוז קוד שרת
-      const res = await fetch("/_server?_data=getAppData");
-      if (!res.ok) throw new Error("Failed to load app data");
-      const data = await res.json();
-      
+      const data = await getAppDataServer();
       setSpecs(data.specs as Spec[]);
       setScenarios(
         (data.scenarios as any[]).map((r) => ({
@@ -203,7 +223,6 @@ function HomePage() {
       setChanges(data.changes as ChangeRecord[]);
     } catch (e) {
       console.error("Error loading data via fetch proxy:", e);
-      // Fallback ישיר ל-Supabase במקרה של בעיית ניתוב בשרת
       const { data: s } = await supabase.from("specs").select("*");
       const { data: sc } = await supabase.from("scenarios").select("*");
       const { data: ch } = await supabase.from("scenario_changes").select("*");
@@ -269,17 +288,12 @@ function HomePage() {
 
         const existingScenarios = [...workingScenarios];
         
-        // קריאה עוקפת Rollup באמצעות קריאת רשת רגילה ל-Server Function של TanStack
-        const genRes = await fetch("/_server?_data=generateScenarios", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            data: { specContent: content, specName: file.name, system: meta.system, images: attachedImages }
-          })
+        const result = await generateScenariosServer({
+          specContent: content,
+          specName: file.name,
+          system: meta.system,
+          images: attachedImages
         });
-        
-        if (!genRes.ok) throw new Error("שגיאה ביצירת תסריטים מהשרת");
-        const result = await genRes.json();
         
         if (!Array.isArray(result) || result.length === 0) {
           throw new Error("לא נוצרו תסריטים מהאפיון. נסו לטעון אפיון מפורט יותר.");
@@ -338,43 +352,34 @@ function HomePage() {
 
         if (existingScenarios.length > 0) {
           try {
-            const analyzeRes = await fetch("/_server?_data=analyzeChanges", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                data: {
-                  specContent: content,
-                  specName: file.name,
-                  existingScenarios: existingScenarios.map((s) => ({
-                    id: s.id,
-                    title: s.title,
-                    area: s.area,
-                    preconditions: s.preconditions,
-                    steps: s.steps,
-                    expected_result: s.expected_result,
-                    priority: s.priority,
-                    type: s.type,
-                  })),
-                }
-              })
+            const res = await analyzeChangesServer({
+              specContent: content,
+              specName: file.name,
+              existingScenarios: existingScenarios.map((s) => ({
+                id: s.id,
+                title: s.title,
+                area: s.area,
+                preconditions: s.preconditions,
+                steps: s.steps,
+                expected_result: s.expected_result,
+                priority: s.priority,
+                type: s.type,
+              })),
             });
             
-            if (analyzeRes.ok) {
-              const res = await analyzeRes.json();
-              const inserts: any[] = [];
-              for (const ch of res.changes ?? []) {
-                inserts.push({
-                  scenario_id: ch.scenario_id,
-                  new_spec_id: spec.id,
-                  reason: ch.reason,
-                  proposed: ch.updated,
-                  status: "pending",
-                });
-              }
-              if (inserts.length) {
-                await supabase.from("scenario_changes").insert(inserts);
-                detectedChanges += inserts.length;
-              }
+            const inserts: any[] = [];
+            for (const ch of res.changes ?? []) {
+              inserts.push({
+                scenario_id: ch.scenario_id,
+                new_spec_id: spec.id,
+                reason: ch.reason,
+                proposed: ch.updated,
+                status: "pending",
+              });
+            }
+            if (inserts.length) {
+              await supabase.from("scenario_changes").insert(inserts);
+              detectedChanges += inserts.length;
             }
           } catch (e) {
             console.error("ניתוח שינויים נכשל", e);
@@ -392,7 +397,7 @@ function HomePage() {
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message ?? "שגיאה בעיבוד הקובץ");
-    } finally {
+    } finaly {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -467,6 +472,7 @@ function HomePage() {
       <ThemeToggle />
       <BatteryProgress visible={progressVisible} progress={progress} />
 
+      {/* תפריט צד ימין קבוע חזותית */}
       <aside className="fixed right-4 top-1/2 z-30 -translate-y-1/2">
         <div className="glass-panel flex flex-col items-stretch gap-1 rounded-2xl p-2 shadow-lg backdrop-blur">
           <button
@@ -475,7 +481,6 @@ function HomePage() {
             className={`group flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${
               tab === "upload" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
             }`}
-            title="טעינת אפיון"
           >
             <Upload className="h-4 w-4 shrink-0" />
             <span className="whitespace-nowrap">טעינת אפיון</span>
@@ -486,7 +491,6 @@ function HomePage() {
             className={`group flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${
               tab === "scenarios" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
             }`}
-            title="תסריטים"
           >
             <ListChecks className="h-4 w-4 shrink-0" />
             <span className="whitespace-nowrap">תסריטים ({scenarios.length})</span>
@@ -497,13 +501,12 @@ function HomePage() {
             className={`group relative flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${
               tab === "changes" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
             }`}
-            title="שינויים ממתינים"
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span className="whitespace-nowrap">שינויים ממתינים</span>
-            {changes.length > 0 && (
-              <span className="mr-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-xs text-destructive-foreground">
-                {changes.length}
+            {pendingChangesCount > 0 && (
+              <span className="mr-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-xs text-white">
+                {pendingChangesCount}
               </span>
             )}
           </button>
@@ -514,18 +517,11 @@ function HomePage() {
         </div>
       </aside>
 
+      {/* כותרת עליונה */}
       <header className="relative overflow-hidden">
-        <div
-          className="absolute inset-0 opacity-90"
-          style={{ background: "var(--gradient-hero)" }}
-        />
+        <div className="absolute inset-0 opacity-90" style={{ background: "var(--gradient-hero)" }} />
         <div className="relative mx-auto max-w-6xl px-6 py-8 text-primary-foreground">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="flex flex-col items-center text-center"
-          >
+          <div className="flex flex-col items-center text-center">
             <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs backdrop-blur">
               <Sparkles className="h-3.5 w-3.5" /> מבוסס AI
             </div>
@@ -539,51 +535,39 @@ function HomePage() {
             <div className="mt-6 flex flex-wrap items-center justify-center gap-4">
               <Stat n={specs.length} label="אפיונים" />
               <Stat n={scenarios.length} label="תסריטים פעילים" />
-              <Stat n={changes.length} label="ממתינים לעדכון" highlight={changes.length > 0} />
+              <Stat n={pendingChangesCount} label="ממתינים לעדכון" highlight={pendingChangesCount > 0} />
             </div>
-          </motion.div>
+          </div>
         </div>
       </header>
 
+      {/* אזור ראשי */}
       <main className="relative z-10 mx-auto max-w-6xl px-6 py-10 pl-6 pr-6 lg:pl-6 lg:pr-44">
         <Tabs value={tab} onValueChange={setTab} dir="rtl">
-          <TabsList className="sr-only">
-            <TabsTrigger value="upload">טעינת אפיון</TabsTrigger>
-            <TabsTrigger value="scenarios">תסריטים</TabsTrigger>
-            <TabsTrigger value="changes">שינויים ממתינים</TabsTrigger>
-          </TabsList>
-
           <TabsContent value="upload" className="mt-6 space-y-6">
+            {/* פאנל טעינת אפיון - שחזור מדוייק לפי image_49f4f7.png */}
             <Card
               className={`glass-panel relative overflow-hidden rounded-[2rem] p-6 text-right transition-all hover:shadow-[var(--shadow-elegant)] ${
                 drag ? "ring-2 ring-primary" : ""
               }`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDrag(true);
-              }}
+              onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
               onDragLeave={() => setDrag(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDrag(false);
-                handleFiles(e.dataTransfer.files);
-              }}
+              onDrop={(e) => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files); }}
             >
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="absolute left-6 top-6 inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <Sparkles className="h-5 w-5" />
               </div>
-              <h3 className="text-lg font-semibold">טעינת אפיון</h3>
-              <p className="mt-1 max-w-4xl text-right text-sm leading-7 text-muted-foreground [text-wrap:pretty]">
-                טענו קובץ אפיון פונקציונלי או טכני (PDF / Word / טקסט) ומלאו את מאפייני האפיון.
-                המערכת תייצר תסריטי בדיקה חדשים, ובמקביל תבדוק האם האפיון משפיע על תסריטים קיימים
-                ותציע עדכונים.
+              <h3 className="text-xl font-bold tracking-tight">טעינת אפיון</h3>
+              <p className="mt-2 text-sm leading-7 text-muted-foreground max-w-3xl">
+                טענו קובץ אפיון פונקציונלי או טכני (PDF / Word / טקסט) ומלאו את מאפייני האפיון. המערכת תייצר תסריטי בדיקה חדשים, ובמקביל תבדוק האם האפיון משפיע על תסריטים קיימים ותציע עדכונים.
               </p>
 
-              <div dir="rtl" className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {/* גריד שדות - 4 עמודות מדויק כמו ב-image_49f4f7.png */}
+              <div dir="rtl" className="mt-8 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-2">
-                  <Label>מערכת</Label>
+                  <Label className="font-bold">מערכת</Label>
                   <Select value={meta.system} onValueChange={(v) => setMeta(m => ({ ...m, system: v, module: "" }))}>
-                    <SelectTrigger><SelectValue placeholder="בחר מערכת" /></SelectTrigger>
+                    <SelectTrigger className="bg-background/50 backdrop-blur"><SelectValue placeholder="בחר מערכת" /></SelectTrigger>
                     <SelectContent>
                       {allSystems.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                     </SelectContent>
@@ -591,49 +575,50 @@ function HomePage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>מודול / תת מערכת</Label>
-                  <Select value={meta.module} onValueChange={(v) => setMeta(m => ({ ...m, module: v }))} disabled={!(MODULES_BY_SYSTEM[meta.system]?.length)}>
-                    <SelectTrigger><SelectValue placeholder="בחר מודול" /></SelectTrigger>
+                  <Label className="font-bold">מודול / תת מערכת</Label>
+                  <Select value={meta.module} onValueChange={(v) => setMeta(m => ({ ...m, module: v }))}>
+                    <SelectTrigger className="bg-background/50 backdrop-blur"><SelectValue placeholder="אדמיניסטרציה" /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="אדמיניסטרציה">אדמיניסטרציה</SelectItem>
                       {(MODULES_BY_SYSTEM[meta.system] ?? []).map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>בודק אחראי</Label>
-                  <Input value={meta.tester} onChange={(e) => setMeta(m => ({ ...m, tester: e.target.value }))} placeholder="שם הבודק" />
+                  <Label className="font-bold">בודק אחראי</Label>
+                  <Input value={meta.tester} onChange={(e) => setMeta(m => ({ ...m, tester: e.target.value }))} className="bg-background/50 backdrop-blur" />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>מיישם אחראי</Label>
-                  <Input value={meta.implementer} onChange={(e) => setMeta(m => ({ ...m, implementer: e.target.value }))} placeholder="שם המיישם" />
+                  <Label className="font-bold">מיישם אחראי</Label>
+                  <Input value={meta.implementer} onChange={(e) => setMeta(m => ({ ...m, implementer: e.target.value }))} className="bg-background/50 backdrop-blur" />
                 </div>
               </div>
 
-              <div className="mt-8 flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/20 rounded-2xl p-8 transition hover:border-primary/40 bg-muted/5">
-                <Upload className="h-8 w-8 text-muted-foreground/60 mb-2" />
-                <p className="text-sm font-medium mb-1">גרור קובץ לכאן או לחץ לבחירה</p>
-                <p className="text-xs text-muted-foreground mb-4">PDF, Word, TXT עד 20MB</p>
+              {/* תיבת העלאה תחתונה כפי שמופיעה ב-image_49f4f7.png */}
+              <div className="mt-8 flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/20 rounded-2xl p-10 transition hover:border-primary/40 bg-muted/5">
+                <Upload className="h-10 w-10 text-muted-foreground/40 mb-3" />
+                <p className="text-base font-bold mb-1">גרור קובץ לכאן או לחץ לבחירה</p>
+                <p className="text-xs text-muted-foreground mb-6">20MB עד PDF, Word, TXT</p>
                 <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
-                <Button disabled={busy} onClick={() => fileRef.current?.click()} variant="outline">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin ml-2" /> : <Upload className="h-4 w-4 ml-2" />}
+                <Button disabled={busy} onClick={() => setShowModal(true)} size="lg" className="shadow-md">
+                  {busy ? <Loader2 className="h-5 w-5 animate-spin ml-2" /> : <Upload className="h-5 w-5 ml-2" />}
                   בחר קבצים
                 </Button>
               </div>
             </Card>
           </TabsContent>
 
-          {/* Scenarios View */}
+          {/* תסריטים פעילים */}
           <TabsContent value="scenarios" className="mt-6">
             <Card className="glass-panel rounded-[2rem] p-6">
               <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                 <h3 className="text-lg font-semibold">תסריטי בדיקה פעילים במערכת</h3>
                 <Input value={specSearch} onChange={(e) => setSpecSearch(e.target.value)} placeholder="חיפוש אפיון..." className="max-w-xs" />
               </div>
-
               {specs.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">אין עדיין תסריטים במערכת, טענו אפיון כדי להתחיל.</div>
+                <div className="text-center py-12 text-muted-foreground">אין עדיין תסריטים במערכת.</div>
               ) : (
                 <div className="space-y-4">
                   {specs.filter(s => s.name.toLowerCase().includes(specSearch.toLowerCase())).map(s => {
@@ -643,25 +628,16 @@ function HomePage() {
                         <div className="flex items-center justify-between">
                           <div>
                             <h4 className="font-bold text-base">{s.name}</h4>
-                            <p className="text-xs text-muted-foreground mt-1">מערכת: {s.system} | בודק: {s.tester} | תסריטים: {specScenarios.length}</p>
+                            <p className="text-xs text-muted-foreground mt-1">מערכת: {s.system} | בודק: {s.tester}</p>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Button size="sm" variant="destructive" onClick={() => removeSpec(s)}><Trash2 className="h-4 w-4" /></Button>
-                          </div>
+                          <Button size="sm" variant="destructive" onClick={() => removeSpec(s)}><Trash2 className="h-4 w-4" /></Button>
                         </div>
-                        {specScenarios.length > 0 && (
-                          <div className="mt-4 space-y-2 border-t pt-4">
-                            {specScenarios.map(sc => (
-                              <div key={sc.id} className="flex items-start justify-between p-2 rounded bg-muted/30 text-sm">
-                                <div>
-                                  <span className="font-semibold">{sc.title}</span>
-                                  <p className="text-xs text-muted-foreground mt-1">תוצאה צפויה: {sc.expected_result}</p>
-                                </div>
-                                <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={() => deleteScenario(sc.id)}><X className="h-4 w-4" /></Button>
-                              </div>
-                            ))}
+                        {specScenarios.map(sc => (
+                          <div key={sc.id} className="flex items-start justify-between p-2 mt-2 rounded bg-muted/30 text-sm">
+                            <span>{sc.title}</span>
+                            <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={() => deleteScenario(sc.id)}><X className="h-4 w-4" /></Button>
                           </div>
-                        )}
+                        ))}
                       </Card>
                     );
                   })}
@@ -670,11 +646,11 @@ function HomePage() {
             </Card>
           </TabsContent>
 
-          {/* Pending Changes */}
+          {/* עדכונים ממתינים */}
           <TabsContent value="changes" className="mt-6">
             <Card className="glass-panel rounded-[2rem] p-6">
               <h3 className="text-lg font-semibold mb-4">שינויים ועדכונים ממתינים לאישור</h3>
-              {changes.filter(c => c.status === "pending").length === 0 ? (
+              {pendingChangesCount === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">אין כרגע שינויים ממתינים לאישור. המערכת מסונכרנת לחלוטין!</div>
               ) : (
                 <div className="space-y-4">
@@ -699,6 +675,104 @@ function HomePage() {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* שחזור מודאל בחירת סוג קלט מדויק - לפי תמונה image_49f8b5.png */}
+      <AnimatePresence>
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-xl rounded-3xl bg-background p-6 shadow-2xl border text-right"
+              dir="rtl"
+            >
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="absolute left-4 top-4 rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <div className="text-center pb-4">
+                <h3 className="text-xl font-bold">מה ברצונך לטעון?</h3>
+                <p className="text-sm text-muted-foreground mt-1">בחרו את מקור הקלט ליצירת התסריטים</p>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {/* אפשרות 1: תמונות אופציונלי */}
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); fileRef.current?.click(); }}
+                  className="w-full flex items-center justify-between p-4 rounded-2xl border bg-muted/10 hover:bg-muted/40 transition text-right"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-xl bg-blue-500/10 text-blue-500"><ImageIcon className="h-5 w-5" /></div>
+                    <div>
+                      <p className="font-bold text-sm">תמונות (אופציונלי)</p>
+                      <p className="text-xs text-muted-foreground">צילומי מסך / סקיצות / תרשימים • עד 8 תמונות, 6MB כל אחת</p>
+                    </div>
+                  </div>
+                  <Badge variant="secondary" className="gap-1"><Sparkles className="h-3 w-3" /> צירוף תמונות</Badge>
+                </button>
+
+                {/* אפשרות 2: אפיון + תמונות */}
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); fileRef.current?.click(); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border bg-muted/10 hover:bg-muted/40 transition text-right"
+                >
+                  <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-500"><FileText className="h-5 w-5" /></div>
+                  <div>
+                    <p className="font-bold text-sm">אפיון + תמונות</p>
+                    <p className="text-xs text-muted-foreground">ניתוח משולב של מסמך האפיון יחד עם 0 תמונות מצורפות</p>
+                  </div>
+                </button>
+
+                {/* אפשרות 3: אפיון בלבד */}
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); fileRef.current?.click(); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border bg-muted/10 hover:bg-muted/40 transition text-right"
+                >
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500"><FileText className="h-5 w-5" /></div>
+                  <div>
+                    <p className="font-bold text-sm">אפיון בלבד</p>
+                    <p className="text-xs text-muted-foreground">יצירת תסריטים על בסיס מסמך האפיון בלבד (תמונות מצורפות יתעלמו)</p>
+                  </div>
+                </button>
+
+                {/* אפשרות 4: תמונות בלבד */}
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); fileRef.current?.click(); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border bg-muted/10 hover:bg-muted/40 transition text-right"
+                >
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500"><ImageIcon className="h-5 w-5" /></div>
+                  <div>
+                    <p className="font-bold text-sm">תמונות בלבד</p>
+                    <p className="text-xs text-muted-foreground">יצירת תסריטים על בסיס 0 התמונות המצורפות בלבד</p>
+                  </div>
+                </button>
+
+                {/* אפשרות 5: ייבוא מ-Monday */}
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); toast.info("מתחבר ל-Monday..."); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border bg-muted/10 hover:bg-muted/40 transition text-right border-purple-500/20"
+                >
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-500"><ArrowRightLeft className="h-5 w-5" /></div>
+                  <div>
+                    <p className="font-bold text-sm">ייבוא מ-Monday</p>
+                    <p className="text-xs text-muted-foreground">שליפת קבצי אפיון מצורפים מבורד מוגדר לפי סטטוס</p>
+                  </div>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
